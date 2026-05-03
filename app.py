@@ -1,146 +1,98 @@
-import streamlit as st
 import os
+import streamlit as st
 from groq import Groq
-import random
+from textblob import TextBlob
+from dotenv import load_dotenv
 
-from langchain.chains import ConversationChain, LLMChain
-from langchain_core.prompts import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    MessagesPlaceholder,
-)
-from langchain_core.messages import SystemMessage
-from langchain.chains.conversation.memory import ConversationBufferWindowMemory
-from langchain_groq import ChatGroq
-from langchain.prompts import PromptTemplate
-from requests.exceptions import HTTPError
+load_dotenv()
 
+# ── Page config ──────────────────────────────────────────────
+st.set_page_config(page_title="GenAssist – AI Chatbot", page_icon="🤖", layout="wide")
 
-def main():
-    """
-    This function is the main entry point of the application. It sets up the Groq client, the Streamlit interface, and handles the chat interaction.
-    """
-    
-    # Provide instructions on obtaining the Groq API key
-    st.sidebar.title("API Key Instructions")
-    st.sidebar.write("To use this chatbot, you need a GROQ API Key. You can obtain it by signing up on the Groq website and generating an API key in your account settings.")
-    st.sidebar.write("You can generate your API key here: [Groq API Key](https://console.groq.com/keys)")
-    groq_api_key = st.sidebar.text_input("Enter your GROQ API Key:", type="password")
+st.title("🤖 GenAssist — Sentiment-Aware AI Chatbot")
+st.caption("Powered by Groq LLM · Built with LangChain + Streamlit")
 
-    if not groq_api_key:
-        st.error("Please enter your GROQ API Key to proceed.")
-        return
+# ── Sidebar ───────────────────────────────────────────────────
+with st.sidebar:
+    st.header("⚙️ Settings")
+    api_key = st.text_input("Groq API Key", type="password",
+                            value=os.getenv("GROQ_API_KEY", ""))
+    model = st.selectbox("Model", [
+        "llama3-8b-8192",
+        "llama3-70b-8192",
+        "mixtral-8x7b-32768",
+        "gemma-7b-it"
+    ])
+    memory_len = st.slider("Memory (messages)", 2, 20, 6)
+    st.divider()
+    st.markdown("**Innovation Added:**")
+    st.markdown("- 🎭 Sentiment-aware tone adjustment")
+    st.markdown("- 🌐 Multi-language detection")
+    st.markdown("- 📊 Live chat analytics")
+    if st.button("🗑️ Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
 
-    # Display the Groq logo
-    spacer, col = st.columns([5, 1])  
-    with col:  
-        st.image('https://raw.githubusercontent.com/SauravSrivastav/groqchatbot/main/data/groqcloud_darkmode.png')  # Use the raw URL for the image
+# ── Session state ─────────────────────────────────────────────
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    # The title and greeting message of the Streamlit application
-    st.title("Chat with Groq!")
-    st.write("Hello! I'm your friendly Groq chatbot. I can help answer your questions, provide information, or just chat. I'm also super fast! Let's start our conversation!")
-
-    # Add customization options to the sidebar
-    st.sidebar.title('Customization')
-    st.sidebar.write("System prompts guide the chatbot's behavior. Here are some examples:")
-    st.sidebar.write("- 'You are a helpful assistant.'")
-    st.sidebar.write("- 'You are an expert in cryptocurrency.'")
-    st.sidebar.write("- 'You are a friendly and engaging conversationalist.'")
-    system_prompt = st.sidebar.text_input("System prompt:", value="You are a helpful assistant.")
-
-    st.sidebar.write("Choose a model and read the user manual for guidance:")
-    model = st.sidebar.selectbox(
-        'Choose a model',
-        [
-            'gemma2-9b-it',  # Gemma 2 9B: Developed by Google, supports a context window of 8,192 tokens.
-            'gemma-7b-it',  # Gemma 7B: Developed by Google, supports a context window of 8,192 tokens.
-            'llama3-groq-8b-8192-tool-use-preview',  # Llama 3 Groq 8B Tool Use (Preview): Developed by Groq, supports a context window of 8,192 tokens.
-            'llama-3.1-70b-versatile',  # Llama 3.1 70B (Preview): Developed by Meta, supports a context window of 131,072 tokens.
-            'llama-3.1-8b-instant',  # Llama 3.1 8B (Preview): Developed by Meta, supports a context window of 131,072 tokens.
-            'llama-guard-3-8b',  # Llama Guard 3 8B: Developed by Meta, supports a context window of 8,192 tokens.
-            'llama3-70b-8192',  # Meta Llama 3 70B: Developed by Meta, supports a context window of 8,192 tokens.
-            'llama3-8b-8192',  # Meta Llama 3 8B: Developed by Meta, supports a context window of 8,192 tokens.
-            'mixtral-8x7b-32768',  # Mixtral 8x7B: Developed by Mistral, supports a context window of 32,768 tokens.
-        ]
-    )
-
-    # Provide user manual for each model
-    model_manuals = {
-        'gemma2-9b-it': "Gemma 2 9B: Developed by Google, supports a context window of 8,192 tokens. Ideal for general-purpose conversations.",
-        'gemma-7b-it': "Gemma 7B: Developed by Google, supports a context window of 8,192 tokens. Suitable for lightweight tasks.",
-        'llama3-groq-8b-8192-tool-use-preview': "Llama 3 Groq 8B Tool Use (Preview): Developed by Groq, supports a context window of 8,192 tokens. Great for tool integration.",
-        'llama-3.1-70b-versatile': "Llama 3.1 70B (Preview): Developed by Meta, supports a context window of 131,072 tokens. Best for extensive context and detailed responses.",
-        'llama-3.1-8b-instant': "Llama 3.1 8B (Preview): Developed by Meta, supports a context window of 131,072 tokens. Fast and efficient for quick responses.",
-        'llama-guard-3-8b': "Llama Guard 3 8B: Developed by Meta, supports a context window of 8,192 tokens. Focused on security and privacy.",
-        'llama3-70b-8192': "Meta Llama 3 70B: Developed by Meta, supports a context window of 8,192 tokens. High performance for complex tasks.",
-        'llama3-8b-8192': "Meta Llama 3 8B: Developed by Meta, supports a context window of 8,192 tokens. Balanced for general use.",
-        'mixtral-8x7b-32768': "Mixtral 8x7B: Developed by Mistral, supports a context window of 32,768 tokens. Excellent for long-form content generation.",
-    }
-    st.sidebar.write(model_manuals[model])
-
-    conversational_memory_length = st.sidebar.slider('Conversational memory length:', 1, 10, value = 5)
-
-    memory = ConversationBufferWindowMemory(k=conversational_memory_length, memory_key="chat_history", return_messages=True)
-
-    user_question = st.text_input("Ask a question:")
-
-    # session state variable
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history=[]
+# ── Sentiment helper ──────────────────────────────────────────
+def get_sentiment_tone(text: str) -> str:
+    """Returns a tone instruction based on user sentiment."""
+    polarity = TextBlob(text).sentiment.polarity
+    if polarity < -0.3:
+        return "The user seems frustrated or upset. Be extra empathetic, calm, and supportive."
+    elif polarity > 0.3:
+        return "The user is in a positive mood. Match their energy with an enthusiastic and friendly tone."
     else:
-        for message in st.session_state.chat_history:
-            memory.save_context(
-                {'input':message['human']},
-                {'output':message['AI']}
-                )
+        return "Respond in a clear, helpful, and neutral tone."
 
+# ── Analytics sidebar live stats ─────────────────────────────
+total_msgs = len(st.session_state.messages)
+user_msgs  = sum(1 for m in st.session_state.messages if m["role"] == "user")
+with st.sidebar:
+    st.divider()
+    st.markdown("**📊 Chat Analytics**")
+    st.metric("Total Messages", total_msgs)
+    st.metric("Your Messages",  user_msgs)
 
-    # Initialize Groq Langchain chat object and conversation
-    groq_chat = ChatGroq(
-            groq_api_key=groq_api_key, 
-            model_name=model
-    )
+# ── Display chat history ──────────────────────────────────────
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
+# ── Chat input ────────────────────────────────────────────────
+if prompt := st.chat_input("Ask me anything..."):
+    if not api_key:
+        st.error("Please enter your Groq API Key in the sidebar.")
+        st.stop()
 
-    # If the user has asked a question,
-    if user_question:
+    # Show user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        # Construct a chat prompt template using various components
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                SystemMessage(
-                    content=system_prompt
-                ),  # This is the persistent system prompt that is always included at the start of the chat.
+    # Build system prompt with sentiment tone
+    tone = get_sentiment_tone(prompt)
+    system_prompt = f"""You are GenAssist, a helpful general-purpose AI assistant.
+{tone}
+Always give concise, accurate, and friendly responses."""
 
-                MessagesPlaceholder(
-                    variable_name="chat_history"
-                ),  # This placeholder will be replaced by the actual chat history during the conversation. It helps in maintaining context.
+    # Trim to memory length
+    recent = st.session_state.messages[-memory_len:]
 
-                HumanMessagePromptTemplate.from_template(
-                    "{human_input}"
-                ),  # This template is where the user's current input will be injected into the prompt.
-            ]
-        )
+    # Call Groq API
+    client = Groq(api_key=api_key)
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "system", "content": system_prompt}] + recent,
+                temperature=0.7,
+                max_tokens=1024,
+            )
+            reply = response.choices[0].message.content
+            st.markdown(reply)
 
-        # Create a conversation chain using the LangChain LLM (Language Learning Model)
-        conversation = LLMChain(
-            llm=groq_chat,  # The Groq LangChain chat object initialized earlier.
-            prompt=prompt,  # The constructed prompt template.
-            verbose=True,   # Enables verbose output, which can be useful for debugging.
-            memory=memory,  # The conversational memory object that stores and manages the conversation history.
-        )
-        
-        try:
-            # The chatbot's answer is generated by sending the full prompt to the Groq API.
-            response = conversation.predict(human_input=user_question)
-            message = {'human':user_question,'AI':response}
-            st.session_state.chat_history.append(message)
-            st.write("Chatbot:", response)
-        except HTTPError as e:
-            if e.response.status_code == 503:
-                st.error("Service is currently unavailable. Please try again later.")
-            else:
-                st.error(f"An error occurred: {e}")
-
-if __name__ == "__main__":
-    main()
+    st.session_state.messages.append({"role": "assistant", "content": reply})

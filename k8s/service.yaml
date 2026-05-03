@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: genassist-service
+  namespace: genassist
+spec:
+  selector:
+    app: genassist
+  type: NodePort
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8501
+      nodePort: 30080
